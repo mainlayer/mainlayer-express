@@ -30,7 +30,7 @@ import type {
 import { MainlayerError } from './types';
 import crypto from 'crypto';
 
-const DEFAULT_BASE_URL = 'https://api.mainlayer.xyz';
+const DEFAULT_BASE_URL = 'https://api.mainlayer.fr';
 
 // ─── requirePayment ─────────────────────────────────────────────────────────
 

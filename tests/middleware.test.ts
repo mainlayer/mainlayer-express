@@ -167,7 +167,7 @@ describe('requirePayment middleware', () => {
       const res = await request(app)
         .get('/protected')
         .set('x-wallet-address', '0xABC');
-      expect(res.body.pay_endpoint).toContain('api.mainlayer.xyz/pay');
+      expect(res.body.pay_endpoint).toContain('api.mainlayer.fr/pay');
     });
 
     it('passes wallet and resourceId via res.locals.mainlayer when access is granted', async () => {
@@ -208,13 +208,13 @@ describe('requirePayment middleware', () => {
       mockEntitlementGranted();
       const app = makeApp({
         ...baseOptions,
-        baseUrl: 'https://staging.api.mainlayer.xyz',
+        baseUrl: 'https://staging.api.mainlayer.fr',
       });
       await request(app)
         .get('/protected')
         .set('x-wallet-address', '0xABC');
       const [fetchUrl] = mockFetch.mock.calls[0]!;
-      expect(String(fetchUrl)).toContain('staging.api.mainlayer.xyz');
+      expect(String(fetchUrl)).toContain('staging.api.mainlayer.fr');
     });
   });
 

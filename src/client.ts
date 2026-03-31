@@ -31,7 +31,7 @@ import {
   MainlayerError,
 } from './types';
 
-const DEFAULT_BASE_URL = 'https://api.mainlayer.xyz';
+const DEFAULT_BASE_URL = 'https://api.mainlayer.fr';
 
 export class MainlayerClient {
   private readonly apiKey: string;

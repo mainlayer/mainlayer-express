@@ -1,6 +1,6 @@
 # @mainlayer/express
 
-Official Express.js middleware and helpers for [Mainlayer](https://mainlayer.xyz) payments.
+Official Express.js middleware and helpers for [Mainlayer](https://mainlayer.fr) payments.
 
 Gate any Express route behind a Mainlayer payment in 5 lines of code — with full TypeScript support, built-in payment routes, and webhook signature verification.
 
@@ -110,7 +110,7 @@ app.get(
     getPayerWallet: (req) => req.headers['x-wallet-address'] as string,
 
     // Optional: custom base URL
-    baseUrl: 'https://api.mainlayer.xyz',
+    baseUrl: 'https://api.mainlayer.fr',
 
     // Optional: access denied callback for logging/metrics
     onAccessDenied: ({ reason, resourceId, wallet, path }) => {
@@ -132,7 +132,7 @@ app.get(
 | `apiKey` | `string` | Yes | Your Mainlayer API key |
 | `resourceId` | `string` | Yes | The resource ID to check entitlement for |
 | `getPayerWallet` | `(req) => string \| null` | No | Extract wallet from request. Defaults to `x-wallet-address` header |
-| `baseUrl` | `string` | No | API base URL. Defaults to `https://api.mainlayer.xyz` |
+| `baseUrl` | `string` | No | API base URL. Defaults to `https://api.mainlayer.fr` |
 | `onAccessDenied` | `(info) => void` | No | Called on every denial with reason, wallet, and path |
 
 **Responses when access is denied:**
@@ -227,7 +227,7 @@ import { MainlayerClient } from '@mainlayer/express';
 
 const client = new MainlayerClient({
   apiKey: process.env.MAINLAYER_API_KEY!,
-  baseUrl: 'https://api.mainlayer.xyz', // optional
+  baseUrl: 'https://api.mainlayer.fr', // optional
 });
 
 // Check entitlement
@@ -471,4 +471,4 @@ MIT — see [LICENSE](./LICENSE) for details.
 
 ---
 
-Built by [Mainlayer](https://mainlayer.xyz) — payment infrastructure for the modern web.
+Built by [Mainlayer](https://mainlayer.fr) — payment infrastructure for the modern web.

@@ -10,7 +10,7 @@ import type { Request } from 'express';
 export interface MainlayerConfig {
   /** Your Mainlayer API key (server-side only). */
   apiKey: string;
-  /** Base URL override — defaults to https://api.mainlayer.xyz */
+  /** Base URL override — defaults to https://api.mainlayer.fr */
   baseUrl?: string;
 }
 

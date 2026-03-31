@@ -29,7 +29,7 @@ exports.verifyWebhook = verifyWebhook;
 const client_1 = require("./client");
 const types_1 = require("./types");
 const crypto_1 = __importDefault(require("crypto"));
-const DEFAULT_BASE_URL = 'https://api.mainlayer.xyz';
+const DEFAULT_BASE_URL = 'https://api.mainlayer.fr';
 // ─── requirePayment ─────────────────────────────────────────────────────────
 /**
  * Express middleware that gates a route behind a Mainlayer payment check.

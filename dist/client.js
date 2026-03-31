@@ -21,7 +21,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MainlayerClient = void 0;
 const types_1 = require("./types");
-const DEFAULT_BASE_URL = 'https://api.mainlayer.xyz';
+const DEFAULT_BASE_URL = 'https://api.mainlayer.fr';
 class MainlayerClient {
     constructor(config) {
         if (!config.apiKey) {
