@@ -400,30 +400,80 @@ try {
 
 ## Examples
 
-Three complete examples are included in the `examples/` directory:
+Complete examples are included in the `examples/` directory:
 
-### `examples/basic-api.ts`
+### `examples/basic-paywall.ts`
 
-A single Express app with a payment-gated route and the built-in Mainlayer router mounted.
+A simple Express server with a single payment-gated route.
 
 ```bash
-MAINLAYER_API_KEY=mk_live_... MAINLAYER_RESOURCE_ID=res_... npx ts-node examples/basic-api.ts
+MAINLAYER_API_KEY=mk_live_... MAINLAYER_RESOURCE_ID=res_... npx ts-node examples/basic-paywall.ts
 ```
 
-### `examples/subscription-api.ts`
+```ts
+import express from 'express';
+import { requirePayment, createMainlayerRouter } from '@mainlayer/express';
 
-Multiple subscription tiers (Starter, Pro, Team), each gated by a different Mainlayer resource ID. Includes a `/api/subscription/status` endpoint that checks all tiers at once.
+const app = express();
+app.use(express.json());
 
-```bash
-MAINLAYER_API_KEY=mk_live_... npx ts-node examples/subscription-api.ts
+// Mount discovery and payment routes
+app.use(createMainlayerRouter({ apiKey: process.env.MAINLAYER_API_KEY! }));
+
+// Gate a route behind Mainlayer
+app.get(
+  '/api/premium',
+  requirePayment({
+    apiKey: process.env.MAINLAYER_API_KEY!,
+    resourceId: process.env.MAINLAYER_RESOURCE_ID!,
+  }),
+  (req, res) => {
+    const { wallet } = res.locals.mainlayer;
+    res.json({ data: 'premium content', wallet });
+  }
+);
+
+app.listen(3000);
 ```
 
 ### `examples/webhook-handler.ts`
 
-A webhook endpoint with signature verification, idempotency checking, and handlers for `payment.completed`, `entitlement.granted`, `entitlement.revoked`, and `payment.failed` events.
+Webhook verification with event handlers for entitlement changes.
 
 ```bash
 MAINLAYER_API_KEY=mk_live_... MAINLAYER_WEBHOOK_SECRET=whsec_... npx ts-node examples/webhook-handler.ts
+```
+
+```ts
+import express from 'express';
+import { verifyWebhook } from '@mainlayer/express';
+
+const app = express();
+
+app.post(
+  '/webhooks/mainlayer',
+  express.raw({ type: 'application/json' }),
+  verifyWebhook(process.env.MAINLAYER_WEBHOOK_SECRET!),
+  (req, res) => {
+    const event = req.body;
+
+    switch (event.type) {
+      case 'entitlement.granted':
+        console.log(`Access granted to ${event.data.wallet} for ${event.data.resource_id}`);
+        break;
+      case 'entitlement.revoked':
+        console.log(`Access revoked for ${event.data.wallet}`);
+        break;
+      case 'payment.failed':
+        console.log(`Payment failed: ${event.data.reason}`);
+        break;
+    }
+
+    res.json({ received: true });
+  }
+);
+
+app.listen(3001);
 ```
 
 ---

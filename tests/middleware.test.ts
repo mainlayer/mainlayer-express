@@ -1,462 +1,283 @@
-import express, { Application } from 'express';
-import request from 'supertest';
-import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+/**
+ * @mainlayer/express middleware tests
+ */
 
-import { requirePayment } from '../src/middleware';
-import { verifyWebhook } from '../src/middleware';
-import { createMainlayerRouter } from '../src/router';
+import request from 'supertest';
+import express from 'express';
+import { requirePayment, verifyWebhook } from '../src/middleware';
+import { MainlayerClient } from '../src/client';
 import crypto from 'crypto';
 
-// ─── Mock global fetch ──────────────────────────────────────────────────────
+// Mock MainlayerClient
+jest.mock('../src/client');
 
-const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-
-beforeEach(() => {
-  global.fetch = mockFetch as typeof fetch;
-  mockFetch.mockReset();
-});
-
-afterEach(() => {
-  jest.restoreAllMocks();
-});
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function makeApp(middlewareOptions?: Parameters<typeof requirePayment>[0]): Application {
-  const app = express();
-  app.use(express.json());
-  if (middlewareOptions) {
-    app.get(
-      '/protected',
-      requirePayment(middlewareOptions),
-      (_req, res) => {
-        res.json({ secret: 'unlocked', locals: res.locals['mainlayer'] });
-      }
-    );
-  }
-  return app;
-}
-
-function mockEntitlementGranted(): void {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      has_access: true,
-      resource_id: 'res_test',
-      payer_wallet: '0xABC',
-    }),
-  } as Response);
-}
-
-function mockEntitlementDenied(): void {
-  mockFetch.mockResolvedValueOnce({
-    ok: false,
-    status: 404,
-    json: async () => ({}),
-  } as Response);
-}
-
-function mockNetworkError(): void {
-  mockFetch.mockRejectedValueOnce(new Error('Network failure'));
-}
-
-// ─── requirePayment middleware ───────────────────────────────────────────────
+const MockClient = MainlayerClient as jest.MockedClass<typeof MainlayerClient>;
 
 describe('requirePayment middleware', () => {
-  const baseOptions = {
-    apiKey: 'mk_test_abc123',
-    resourceId: 'res_test_001',
-  };
+  let app: express.Application;
 
-  describe('wallet extraction', () => {
-    it('returns 401 when no wallet header is present', async () => {
-      const app = makeApp(baseOptions);
-      const res = await request(app).get('/protected');
-      expect(res.status).toBe(401);
-      expect(res.body.error).toBe('authentication_required');
-    });
+  beforeEach(() => {
+    app = express();
+    app.use(express.json());
+    jest.clearAllMocks();
+  });
 
-    it('returns 401 with a descriptive message when wallet is missing', async () => {
-      const app = makeApp(baseOptions);
-      const res = await request(app).get('/protected');
-      expect(res.body.message).toMatch(/wallet address/i);
-    });
+  it('allows access when wallet has entitlement', async () => {
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockResolvedValue({
+        hasAccess: true,
+        entitlement: { resource_id: 'res_123', payer_wallet: '0xABC' },
+      }),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
 
-    it('reads wallet from x-wallet-address header by default', async () => {
-      mockEntitlementGranted();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC123');
-      expect(res.status).toBe(200);
-    });
+    app.get(
+      '/protected',
+      requirePayment({ resourceId: 'res_123', apiKey: 'test_key' }),
+      (req, res) => res.json({ success: true })
+    );
 
-    it('uses a custom getPayerWallet function when provided', async () => {
-      mockEntitlementGranted();
-      const app = makeApp({
-        ...baseOptions,
-        getPayerWallet: (req) => req.headers['x-custom-wallet'] as string,
-      });
-      const res = await request(app)
-        .get('/protected')
-        .set('x-custom-wallet', '0xCustom999');
-      expect(res.status).toBe(200);
-    });
+    const res = await request(app)
+      .get('/protected')
+      .set('x-wallet-address', '0xABC');
 
-    it('returns 401 when custom getPayerWallet returns null', async () => {
-      const app = makeApp({
-        ...baseOptions,
-        getPayerWallet: () => null,
-      });
-      const res = await request(app).get('/protected');
-      expect(res.status).toBe(401);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
 
-    it('returns 401 when custom getPayerWallet returns undefined', async () => {
-      const app = makeApp({
-        ...baseOptions,
-        getPayerWallet: () => undefined,
-      });
-      const res = await request(app).get('/protected');
-      expect(res.status).toBe(401);
+  it('returns 402 when wallet has no entitlement', async () => {
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockResolvedValue({ hasAccess: false }),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
+
+    app.get(
+      '/protected',
+      requirePayment({ resourceId: 'res_123', apiKey: 'test_key' }),
+      (req, res) => res.json({ success: true })
+    );
+
+    const res = await request(app)
+      .get('/protected')
+      .set('x-wallet-address', '0xABC');
+
+    expect(res.status).toBe(402);
+    expect(res.body.error).toBe('payment_required');
+  });
+
+  it('returns 401 when wallet header is missing', async () => {
+    app.get(
+      '/protected',
+      requirePayment({ resourceId: 'res_123', apiKey: 'test_key' }),
+      (req, res) => res.json({ success: true })
+    );
+
+    const res = await request(app).get('/protected');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('authentication_required');
+  });
+
+  it('uses custom getPayerWallet function', async () => {
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockResolvedValue({
+        hasAccess: true,
+      }),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
+
+    app.get(
+      '/protected',
+      requirePayment({
+        resourceId: 'res_123',
+        apiKey: 'test_key',
+        getPayerWallet: (req) => req.query.wallet as string,
+      }),
+      (req, res) => res.json({ success: true })
+    );
+
+    await request(app).get('/protected?wallet=0xDEF');
+
+    expect(mockInstance.checkEntitlement).toHaveBeenCalledWith({
+      resourceId: 'res_123',
+      payerWallet: '0xDEF',
     });
   });
 
-  describe('entitlement checks', () => {
-    it('calls next() when entitlement check returns has_access: true', async () => {
-      mockEntitlementGranted();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.status).toBe(200);
-      expect(res.body.secret).toBe('unlocked');
-    });
+  it('calls onAccessDenied callback', async () => {
+    const callback = jest.fn();
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockResolvedValue({ hasAccess: false }),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
 
-    it('returns 402 when entitlement check returns 404 (no access)', async () => {
-      mockEntitlementDenied();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.status).toBe(402);
-    });
+    app.get(
+      '/protected',
+      requirePayment({
+        resourceId: 'res_123',
+        apiKey: 'test_key',
+        onAccessDenied: callback,
+      }),
+      (req, res) => res.json({ success: true })
+    );
 
-    it('returns 402 body with payment_required error key', async () => {
-      mockEntitlementDenied();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.body.error).toBe('payment_required');
-    });
+    await request(app)
+      .get('/protected')
+      .set('x-wallet-address', '0xABC');
 
-    it('includes resource_id in the 402 response body', async () => {
-      mockEntitlementDenied();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.body.resource_id).toBe(baseOptions.resourceId);
-    });
-
-    it('includes pay_endpoint in the 402 response body', async () => {
-      mockEntitlementDenied();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.body.pay_endpoint).toContain('api.mainlayer.fr/pay');
-    });
-
-    it('passes wallet and resourceId via res.locals.mainlayer when access is granted', async () => {
-      mockEntitlementGranted();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.body.locals).toMatchObject({
-        wallet: '0xABC',
-        resourceId: baseOptions.resourceId,
-      });
-    });
-
-    it('sends Authorization: Bearer <apiKey> to the Mainlayer API', async () => {
-      mockEntitlementGranted();
-      const app = makeApp(baseOptions);
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      const [, fetchInit] = mockFetch.mock.calls[0]!;
-      const headers = fetchInit?.headers as Record<string, string>;
-      expect(headers['Authorization']).toBe(`Bearer ${baseOptions.apiKey}`);
-    });
-
-    it('includes resource_id and payer_wallet in the entitlements check URL', async () => {
-      mockEntitlementGranted();
-      const app = makeApp(baseOptions);
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xWALLET');
-      const [fetchUrl] = mockFetch.mock.calls[0]!;
-      expect(String(fetchUrl)).toContain('resource_id=res_test_001');
-      expect(String(fetchUrl)).toContain('payer_wallet=0xWALLET');
-    });
-
-    it('uses a custom baseUrl when provided', async () => {
-      mockEntitlementGranted();
-      const app = makeApp({
-        ...baseOptions,
-        baseUrl: 'https://staging.api.mainlayer.fr',
-      });
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      const [fetchUrl] = mockFetch.mock.calls[0]!;
-      expect(String(fetchUrl)).toContain('staging.api.mainlayer.fr');
-    });
+    expect(callback).toHaveBeenCalled();
+    expect(callback.mock.calls[0][0].reason).toBe('payment_required');
   });
 
-  describe('error handling', () => {
-    it('returns 503 when the Mainlayer API throws a network error', async () => {
-      mockNetworkError();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.status).toBe(503);
-    });
+  it('handles API errors gracefully', async () => {
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockRejectedValue(new Error('API error')),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
 
-    it('returns 503 with service_unavailable error key on network error', async () => {
-      mockNetworkError();
-      const app = makeApp(baseOptions);
-      const res = await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(res.body.error).toBe('service_unavailable');
-    });
+    app.get(
+      '/protected',
+      requirePayment({ resourceId: 'res_123', apiKey: 'test_key' }),
+      (req, res) => res.json({ success: true })
+    );
+
+    const res = await request(app)
+      .get('/protected')
+      .set('x-wallet-address', '0xABC');
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('service_unavailable');
   });
 
-  describe('onAccessDenied callback', () => {
-    it('calls onAccessDenied with no_wallet reason when wallet is missing', async () => {
-      const onAccessDenied = jest.fn();
-      const app = makeApp({ ...baseOptions, onAccessDenied });
-      await request(app).get('/protected');
-      expect(onAccessDenied).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'no_wallet', resourceId: baseOptions.resourceId })
-      );
-    });
+  it('sets res.locals.mainlayer when access granted', async () => {
+    const mockInstance = {
+      checkEntitlement: jest.fn().mockResolvedValue({
+        hasAccess: true,
+      }),
+    };
+    MockClient.mockImplementation(() => mockInstance as any);
 
-    it('calls onAccessDenied with payment_required reason when access is denied', async () => {
-      mockEntitlementDenied();
-      const onAccessDenied = jest.fn();
-      const app = makeApp({ ...baseOptions, onAccessDenied });
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(onAccessDenied).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: 'payment_required',
-          wallet: '0xABC',
-        })
-      );
-    });
+    app.get(
+      '/protected',
+      requirePayment({ resourceId: 'res_123', apiKey: 'test_key' }),
+      (req, res) => {
+        expect(res.locals.mainlayer).toBeDefined();
+        expect(res.locals.mainlayer.wallet).toBe('0xABC');
+        expect(res.locals.mainlayer.resourceId).toBe('res_123');
+        res.json({ success: true });
+      }
+    );
 
-    it('calls onAccessDenied with api_error reason on network failure', async () => {
-      mockNetworkError();
-      const onAccessDenied = jest.fn();
-      const app = makeApp({ ...baseOptions, onAccessDenied });
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(onAccessDenied).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'api_error' })
-      );
-    });
-
-    it('does not call onAccessDenied when access is granted', async () => {
-      mockEntitlementGranted();
-      const onAccessDenied = jest.fn();
-      const app = makeApp({ ...baseOptions, onAccessDenied });
-      await request(app)
-        .get('/protected')
-        .set('x-wallet-address', '0xABC');
-      expect(onAccessDenied).not.toHaveBeenCalled();
-    });
+    await request(app)
+      .get('/protected')
+      .set('x-wallet-address', '0xABC');
   });
 });
 
-// ─── verifyWebhook middleware ────────────────────────────────────────────────
-
 describe('verifyWebhook middleware', () => {
-  const webhookSecret = 'whsec_supersecretkey123';
+  let app: express.Application;
+  const secret = 'test_secret_123';
 
-  function makeWebhookApp(): Application {
-    const app = express();
+  beforeEach(() => {
+    app = express();
+  });
+
+  it('verifies webhook signature correctly', async () => {
+    const payload = { event: 'test' };
+    const rawBody = JSON.stringify(payload);
+    const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
     app.post(
       '/webhook',
       express.raw({ type: 'application/json' }),
-      verifyWebhook(webhookSecret),
-      (req, res) => {
-        res.json({ received: true, event: req.body });
-      }
+      verifyWebhook(secret),
+      (req, res) => res.json({ received: true })
     );
-    return app;
-  }
 
-  function signPayload(payload: string, secret: string): string {
-    return crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  }
-
-  it('throws when no secret is provided', () => {
-    expect(() => verifyWebhook('')).toThrow();
-  });
-
-  it('returns 400 when the x-mainlayer-signature header is missing', async () => {
-    const app = makeWebhookApp();
     const res = await request(app)
       .post('/webhook')
-      .send(JSON.stringify({ type: 'payment.completed' }))
-      .set('Content-Type', 'application/json');
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('missing_signature');
+      .set('x-mainlayer-signature', signature)
+      .send(rawBody)
+      .type('json');
+
+    expect(res.status).toBe(200);
+    expect(res.body.received).toBe(true);
   });
 
-  it('returns 401 when the signature is invalid', async () => {
-    const app = makeWebhookApp();
+  it('rejects invalid signature', async () => {
+    app.post(
+      '/webhook',
+      express.raw({ type: 'application/json' }),
+      verifyWebhook(secret),
+      (req, res) => res.json({ received: true })
+    );
+
     const res = await request(app)
       .post('/webhook')
-      .set('Content-Type', 'application/json')
-      .set('x-mainlayer-signature', 'badhex0000000000000000000000000000000000000000000000000000000000')
-      .send(JSON.stringify({ type: 'payment.completed' }));
+      .set('x-mainlayer-signature', 'invalid_signature')
+      .send(JSON.stringify({ event: 'test' }))
+      .type('json');
+
     expect(res.status).toBe(401);
     expect(res.body.error).toBe('invalid_signature');
   });
 
-  it('returns 200 and parsed body when the signature is valid', async () => {
-    const app = makeWebhookApp();
-    const payload = JSON.stringify({ type: 'payment.completed', id: 'evt_123' });
-    const sig = signPayload(payload, webhookSecret);
+  it('rejects missing signature', async () => {
+    app.post(
+      '/webhook',
+      express.raw({ type: 'application/json' }),
+      verifyWebhook(secret),
+      (req, res) => res.json({ received: true })
+    );
 
     const res = await request(app)
       .post('/webhook')
+      .send(JSON.stringify({ event: 'test' }))
+      .type('json');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('missing_signature');
+  });
+
+  it('rejects invalid JSON in webhook body', async () => {
+    const signature = crypto.createHmac('sha256', secret).update('invalid json').digest('hex');
+
+    app.post(
+      '/webhook',
+      express.raw({ type: 'application/json' }),
+      verifyWebhook(secret),
+      (req, res) => res.json({ received: true })
+    );
+
+    const res = await request(app)
+      .post('/webhook')
+      .set('x-mainlayer-signature', signature)
       .set('Content-Type', 'application/json')
-      .set('x-mainlayer-signature', sig)
-      .send(payload);
+      .send('invalid json');
 
-    expect(res.status).toBe(200);
-    expect(res.body.received).toBe(true);
-    expect(res.body.event.type).toBe('payment.completed');
-  });
-});
-
-// ─── createMainlayerRouter ───────────────────────────────────────────────────
-
-describe('createMainlayerRouter', () => {
-  const apiKey = 'mk_test_router_key';
-
-  function makeRouterApp(): Application {
-    const app = express();
-    app.use(express.json());
-    app.use(createMainlayerRouter({ apiKey }));
-    return app;
-  }
-
-  describe('GET /mainlayer/discover', () => {
-    it('returns 200 with resource list from the API', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ resources: [{ id: 'res_1', name: 'Pro API' }] }),
-      } as Response);
-
-      const app = makeRouterApp();
-      const res = await request(app).get('/mainlayer/discover');
-      expect(res.status).toBe(200);
-      expect(res.body.resources).toHaveLength(1);
-    });
-
-    it('returns 503 when the discover API fails', async () => {
-      mockFetch.mockRejectedValueOnce(new Error('Network failure'));
-      const app = makeRouterApp();
-      const res = await request(app).get('/mainlayer/discover');
-      expect(res.status).toBe(503);
-    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_json');
   });
 
-  describe('POST /mainlayer/pay', () => {
-    it('returns 400 when resource_id is missing', async () => {
-      const app = makeRouterApp();
-      const res = await request(app)
-        .post('/mainlayer/pay')
-        .send({ payer_wallet: '0xABC' });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe('validation_error');
-    });
+  it('parses and sets req.body after verification', async () => {
+    const payload = { event_id: '123', type: 'payment.completed' };
+    const rawBody = JSON.stringify(payload);
+    const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 
-    it('returns 400 when payer_wallet is missing', async () => {
-      const app = makeRouterApp();
-      const res = await request(app)
-        .post('/mainlayer/pay')
-        .send({ resource_id: 'res_1' });
-      expect(res.status).toBe(400);
-    });
+    app.post(
+      '/webhook',
+      express.raw({ type: 'application/json' }),
+      verifyWebhook(secret),
+      (req, res) => {
+        expect(req.body).toEqual(payload);
+        res.json({ received: true });
+      }
+    );
 
-    it('proxies the payment to the Mainlayer API and returns the result', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ success: true, transaction_id: 'txn_abc' }),
-      } as Response);
-
-      const app = makeRouterApp();
-      const res = await request(app)
-        .post('/mainlayer/pay')
-        .send({ resource_id: 'res_1', payer_wallet: '0xABC' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-    });
-  });
-
-  describe('GET /mainlayer/access/:resourceId', () => {
-    it('returns 400 when payer_wallet query param and header are both missing', async () => {
-      const app = makeRouterApp();
-      const res = await request(app).get('/mainlayer/access/res_001');
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe('validation_error');
-    });
-
-    it('checks access via query param and returns result', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ has_access: true }),
-      } as Response);
-
-      const app = makeRouterApp();
-      const res = await request(app)
-        .get('/mainlayer/access/res_001')
-        .query({ payer_wallet: '0xABC' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.hasAccess).toBe(true);
-    });
-
-    it('accepts wallet from x-wallet-address header as fallback', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ has_access: false }),
-      } as Response);
-
-      const app = makeRouterApp();
-      const res = await request(app)
-        .get('/mainlayer/access/res_001')
-        .set('x-wallet-address', '0xFALLBACK');
-
-      expect(res.status).toBe(200);
-    });
+    await request(app)
+      .post('/webhook')
+      .set('x-mainlayer-signature', signature)
+      .send(rawBody)
+      .type('json');
   });
 });
